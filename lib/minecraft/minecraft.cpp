@@ -1,8 +1,10 @@
 #include "minecraft.h"
 #include <chunk.h>
+#include <cstdint>
 #include <string>
 #include <zephyr/kernel.h>
 #include <zephyr/net/socket.h>
+#include <zephyr/sys/byteorder.h>
 #include <stdint.h>
 #include <math.h>
 
@@ -70,7 +72,6 @@ bool minecraft::player::readLoginStart(){
 }
 
 uint64_t minecraft::player::readPing(){
-    while(S->available() < 10);
     readVarInt(); // length
     readVarInt(); // packet id
     uint64_t payload = readLong(); // payload
@@ -79,7 +80,6 @@ uint64_t minecraft::player::readPing(){
 }
 
 void minecraft::player::readRequest(){
-    while(S->available() < 2);
     readVarInt();
     readVarInt();
     login("request packet received");
@@ -147,7 +147,7 @@ void minecraft::player::readEntityAction(){
 }
 
 // CLIENTBOUND BROADCAST
-void minecraft::broadcastChatMessage(std::string msg,std::stringusername){
+void minecraft::broadcastChatMessage(std::string msg, std::string username){
     for(auto player : players){
         if(player.connected){
             player.writeChat(msg, username);
@@ -317,7 +317,7 @@ void minecraft::player::writePlayerPositionAndLook(double x, double y, double z,
 void minecraft::player::writeKeepAlive(){
     packet p(S, mtx);
     p.writeVarInt(0x1F);
-    uint32_t num = millis()/1000;
+    uint32_t num = k_uptime_get() / 1000;
     p.writeLong(num);
     logout("keepalive sent: " + std::to_string(num));
     p.writePacket();
@@ -462,83 +462,89 @@ void minecraft::player::writeEntityDestroy(uint8_t id){
 
 // READ TYPES
 uint16_t minecraft::player::readUnsignedShort(){
-    while(S->available() < 2);
-    int ret = S->read();
-    return (ret << 8) | S->read();
+	uint8_t r[sizeof(uint16_t)] = {0};
+
+	recv(S, r, sizeof(uint16_t), 0);
+
+	return sys_get_be16(r);
 }
 
 float minecraft::player::readFloat(){
-    char b[4] = {};
-    while(S->available() < 4);
-    for(int i=3; i>=0; i--){
-        b[i] = S->read();
-    }
-    float f = 0;
-    memcpy(&f, b, sizeof(float));
-    return f;
+    uint8_t r[sizeof(float)] = {0};
+
+	recv(S, r, sizeof(float), 0);
+
+    return (float)(sys_get_be32(r));
 }
 
 double minecraft::player::readDouble(){
-    char b[8] = {};
-    while(S->available() < 8);
-    for(int i=7; i>=0; i--){
-        b[i] = S->read();
-    }
-    double d = 0;
-    memcpy(&d, b, sizeof(double));
-    return d;
+    uint8_t r[sizeof(double)] = {0};
+
+	recv(S, r, sizeof(double), 0);
+
+    return (double)(sys_get_be64(r));
+}
+
+uint32_t minecraft::player::readUnsignedLong(){
+    uint8_t r[sizeof(uint32_t)] = {0};
+
+	recv(S, r, sizeof(uint32_t), 0);
+
+    return (int32_t)(sys_get_be32(r));
 }
 
 int64_t minecraft::player::readLong(){
-    char b[8] = {};
-    while(S->available() < 8);
-    for(int i=0; i<8; i++){
-        b[i] = S->read();
-    }
-    uint64_t l = ((uint64_t) b[0] << 56)
-       | ((uint64_t) b[1] & 0xff) << 48
-       | ((uint64_t) b[2] & 0xff) << 40
-       | ((uint64_t) b[3] & 0xff) << 32
-       | ((uint64_t) b[4] & 0xff) << 24
-       | ((uint64_t) b[5] & 0xff) << 16
-       | ((uint64_t) b[6] & 0xff) << 8
-       | ((uint64_t) b[7] & 0xff);
-    return l;
+    uint8_t r[sizeof(int64_t)] = {0};
+
+	recv(S, r, sizeof(int64_t), 0);
+
+    return (int64_t)(sys_get_be64(r));
 }
 
 std::string minecraft::player::readString(){
     int length = readVarInt();
-    std::string result;
-    for(int i=0; i<length; i++){
-        while (S->available() < 1);
-        result.concat((char)S->read());
-    }
+
+    std::string result(length + 1, 0);
+
+	recv(S, &result[0], length, 0);
+
     return result;
 }
 
 int32_t minecraft::player::readVarInt() {
-    int numRead = 0;
-    int result = 0;
-    uint8_t read;
+	int numRead = 0;
+    int32_t result = 0;
+    uint8_t current_byte;
+
     do {
-        while (S->available() < 1);
-        read = S->read();
-        int value = (read & 0b01111111);
-        result |= (value << (7 * numRead));
+        recv(S, &current_byte, 1, 0);
+
+        int32_t value_segment = (current_byte & 0b01111111);
+        result |= (value_segment << (7 * numRead));
+
         numRead++;
         if (numRead > 5) {
-            logerr("VarInt too big");
+            return -1;
         }
-    } while ((read & 0b10000000) != 0);
+    } while ((current_byte & 0b10000000) != 0);
+
     return result;
 }
 
 uint8_t minecraft::player::readByte(){
-    return S->read();
+	uint8_t r;
+
+	recv(S, &r, sizeof(uint8_t), 0);
+
+    return r;
 }
 
 bool minecraft::player::readBool(){
-    return S->read();
+	uint8_t r;
+
+	recv(S, &r, sizeof(uint8_t), 0);
+
+	return (bool)r;
 }
 
 // WRITE TYPES
@@ -581,7 +587,7 @@ void packet::writeVarLong(int64_t value) {
 void packet::writeString(std::string str){
     int length = str.length();
     uint8_t buf[length + 1]; 
-    str.getBytes(buf, length + 1);
+	memcpy(buf, str.data(), length);
     writeVarInt(length);
     write(buf, length);
     /*for(int i=0; i<length; i++){
@@ -684,44 +690,41 @@ void minecraft::handle(){
 }
 
 void minecraft::player::handle(){
-    if(S->available() > 2){
-        uint32_t length = S->read();
-        uint32_t packetid = S->read();
-        switch (packetid){
-        case 0x03:
-            readChat();
-            break;
-        case 0x12:
-            readPosition();
-            break;
-        case 0x14:
-            readRotation();
-            break;
-        case 0x10:
-            readKeepAlive();
-            break;
-        case 0x13:
-            readPositionAndLook();
-            break;
-        case 0x00:
-            readTeleportConfirm();
-            break;
-        case 0x2C:
-            readAnimation();
-            break;
-        case 0x1C:
-            readEntityAction();
-            break;
-        default:
-            loginfo("id: 0x" + std::to_string(packetid, HEX) + " length: " + std::to_string(length));
-            for(int i=0; i < length - VarIntLength(packetid); i++ ){
-                while (S->available() < 1);
-                // loginfo("packet id " + std::to_string(packetid));
-                S->read();
-            }
-            break;
-        }
-    }
+	uint32_t length = readUnsignedLong();
+	uint32_t packetid = readUnsignedLong();
+	switch (packetid){
+	case 0x03:
+		readChat();
+		break;
+	case 0x12:
+		readPosition();
+		break;
+	case 0x14:
+		readRotation();
+		break;
+	case 0x10:
+		readKeepAlive();
+		break;
+	case 0x13:
+		readPositionAndLook();
+		break;
+	case 0x00:
+		readTeleportConfirm();
+		break;
+	case 0x2C:
+		readAnimation();
+		break;
+	case 0x1C:
+		readEntityAction();
+		break;
+	default:
+		//loginfo("id: 0x" + std::to_string(packetid, HEX) + " length: " + std::to_string(length));
+		for (int i = 0; i < length - VarIntLength(packetid); i++ ){
+			// loginfo("packet id " + std::to_string(packetid));
+			readByte();
+		}
+		break;
+	}
 }
 
 // UTILITIES

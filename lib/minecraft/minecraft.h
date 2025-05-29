@@ -143,6 +143,7 @@ class minecraft{
         int32_t readVarInt      ();
         std::string readString       ();
         int64_t readLong        ();
+        uint32_t readUnsignedLong();
         uint16_t readUnsignedShort();
         uint32_t VarIntLength   (int val);
         uint8_t readByte        ();
