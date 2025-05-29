@@ -85,7 +85,6 @@ class minecraft{
 				// Initialization failed. Handle the error.
 				//printk("Error: Failed to initialize k_mutex in Player constructor. Error code: %d\n", ret);
 				// Since initialization failed, free the previously allocated memory.
-				k_free(mtx);
 				mtx = nullptr; // Set to nullptr to indicate failure.
 			} else {
 				//printk("Player mutex allocated and initialized successfully.\n");
@@ -94,7 +93,6 @@ class minecraft{
 
 		~player() {
 			if (mtx != nullptr) {
-				k_free(mtx);
 				mtx = nullptr;
 			}
 		}

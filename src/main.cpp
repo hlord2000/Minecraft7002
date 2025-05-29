@@ -57,7 +57,7 @@ typedef struct{
 } clients;
 
 #define MAX_PLAYERS 5
-#define STACK_SIZE 4096
+#define STACK_SIZE 16384
 clients serverClients[MAX_PLAYERS];
 
 /* Processing threads for incoming connections */
@@ -179,7 +179,7 @@ static void process_tcp4(void)
 	}
 }
 
-K_THREAD_DEFINE(tcp4_thread_id, 4096,
+K_THREAD_DEFINE(tcp4_thread_id, 16384,
 		process_tcp4, NULL, NULL, NULL,
 		THREAD_PRIORITY, 0, -1);
 
